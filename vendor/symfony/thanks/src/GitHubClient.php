@@ -58,9 +58,9 @@ class GitHubClient
             'name' => 'phpDocumentor/phpDocumentor2',
             'url' => 'https://github.com/phpDocumentor/phpDocumentor2',
         ],
-        'piwik' => [
+        'matomo' => [
             'name' => 'piwik/piwik',
-            'url' => 'https://github.com/piwik/piwik',
+            'url' => 'https://github.com/matomo-org/matomo',
         ],
         'reactphp' => [
             'name' => 'reactphp/react',
@@ -103,7 +103,7 @@ class GitHubClient
         $this->rfs = Factory::createRemoteFilesystem($io, $composer->getConfig());
     }
 
-    public function getRepositories(array &$failures = null)
+    public function getRepositories(array &$failures = null, $withFundingLinks = false)
     {
         $repo = $this->composer->getRepositoryManager()->getLocalRepository();
 
@@ -144,13 +144,15 @@ class GitHubClient
         ksort($urls);
 
         $i = 0;
-        $template = '_%d: repository(owner:"%s",name:"%s"){id,viewerHasStarred}'."\n";
+        $template = $withFundingLinks
+            ? '_%d: repository(owner:"%s",name:"%s"){id,viewerHasStarred,fundingLinks{platform,url}}'."\n"
+            : '_%d: repository(owner:"%s",name:"%s"){id,viewerHasStarred}'."\n";
         $graphql = '';
 
         foreach ($urls as $package => $url) {
             if (preg_match('#^https://github.com/([^/]++)/(.*?)(?:\.git)?$#i', $url, $url)) {
                 $graphql .= sprintf($template, ++$i, $url[1], $url[2]);
-                $aliases['_'.$i] = [$package, $url[0]];
+                $aliases['_'.$i] = [$package, sprintf('https://github.com/%s/%s', $url[1], $url[2])];
             }
         }
 
@@ -196,11 +198,16 @@ class GitHubClient
         $result = json_decode($result, true);
 
         if (isset($result['errors'][0]['message'])) {
-            if (!$result['data']) {
+            if (!isset($result['data'])) {
                 throw new TransportException($result['errors'][0]['message']);
             }
 
             foreach ($result['errors'] as $error) {
+                if (!isset($error['path'])) {
+                    $failures[isset($error['type']) ? $error['type'] : $error['message']] = $error['message'];
+                    continue;
+                }
+
                 foreach ($error['path'] as $path) {
                     $failures += [$path => $error['message']];
                     unset($result['data'][$path]);
@@ -208,7 +215,7 @@ class GitHubClient
             }
         }
 
-        return $result['data'];
+        return isset($result['data']) ? $result['data'] : [];
     }
 
     private function getDirectlyRequiredPackageNames()
